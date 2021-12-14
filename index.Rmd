@@ -46,92 +46,227 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
+## Lindsey King lkk497
 
 ### Introduction 
 
-Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+The data set that I have chosen for this project is `Fatality`. This data set contains statistics about drunk drivers and traffic laws from the years 1982 to 1988 in 48 different states. One observation is a set of statistics from one specific year in one specific state. For this project I decided to just use the statictis for each of th 48 states from the year 1988. Drunk driving is a very serious crime that causes thousands of deaths each year. I chose this data set to analyze to see what different aspects have affects on drunk driving statistics and if there is a way we can effectively decrease drunk driving. This data set is from the package `Edcat` and I found it on the website https://vincentarelbundock.github.io/Rdatasets/datasets.html. The data set has 336 observations in total. The variable `state` is the state ID code for each observation. The states are alphabetically coded so 1 is Alabama and 56 is Wyoming (some numbers are skipped like 7 that's why there is 56). The variable `year` contains the year of each observation. The variable `mrall` measures the traffic fatality rate (deaths per 10,000 people). The variable `beertax` measures the tax on a case of beer. The variable `mlda` is the minimum legal drinking age. The variable `jaild` is a binary measure of whether or not drunk driving had a mandatory jail sentence in a state. The variable `comserd` is a binary measure of whether or not drunk driving had a mandatory community service sentence in a state. The variable `vmiles` measures the average miles per driver. The variable `unrate` measures the unemployment rate. The variable `perinc` measured the per capita personal income. I removed one extraneous variable. In this data set there are 34 observations that did not have a mandatory jail sentence and 14 observations that did have a mandatory jail sentence. There 38 observations that did not have a mandatory community service sentence and 10 observations that did have a mandatory community service sentence. 
 
 ```{R}
 library(tidyverse)
-# read your datasets in here, e.g., with read_csv()
 
-# if your dataset needs tidying, do so here
+library(readr)
+Fatality <- read_csv("Fatality.csv")
 
-# any other code here
+Fatality <- Fatality %>% filter(year==1988)
+head(Fatality)
+
+Fatality %>% group_by(jaild) %>% summarize(n())
+Fatality %>% group_by(comserd) %>% summarize(n())
 ```
 
 ### Cluster Analysis
 
 ```{R}
 library(cluster)
-# clustering code here
+Fat_clust <- Fatality %>% mutate_if(is.character,as.factor) %>% select(X1, mrall, beertax, vmiles, unrate, perinc, jaild)
+gower <- daisy(Fat_clust, metric = "gower")
+
+sil_width<-vector()
+for(i in 2:10){  
+  pam_fit <- pam(gower, diss = TRUE, k = i)  
+  sil_width[i] <- pam_fit$silinfo$avg.width  
+}
+
+ggplot() + geom_line(aes(x=1:10,y=sil_width)) + scale_x_continuous(name="k",breaks=1:10)
+pam <- pam(gower, k = 2, diss = T)
+pam
+
+Fatality %>% slice(pam$id.med)
+
+library(GGally)
+Fat_clust %>% mutate(cluster = as.factor(pam$clustering)) %>% ggpairs(columns =c(2:6,8), aes(color=cluster))
+
+plot(pam, which=2)
+pam$silinfo$avg.width
 ```
 
-Discussion of clustering here
+The overall average silhouette width of our cluster solution is 0.41. This means that the structure is weak and could be artificial. The medoids of the two clusters are the states with the IDs 29 and 41. These are states Missouri and Oregon. Since we used the variable `jaild` to cluster based on gower dissimilarities, Missouri represents cluster 1, the states that do not require a mandatory jail sentence for drunk driving, and Oregon represents cluster 2, states that do require a mandatory jail sentence for drunk driving. The variable that shows the greatest difference between the two clusters is `mrall`, which is the traffic fatality rate (deaths per 10,000). The states in cluster 1 have lower traffic fatality rates white the states in cluster 2 have higher  traffic fatality rates. The variable that shows the greatest difference between the two clusters is `beertax` which is the tax on a case of beer. 
     
     
 ### Dimensionality Reduction with PCA
 
 ```{R}
-# PCA code here
+Fat_num <- Fatality %>% select(mrall, beertax, vmiles, unrate, perinc)
+pca <- princomp(Fat_num, scale=T, center=T, cor=T)
+summary(pca, loadings=T)
+
+pcascore_df <- as.data.frame(pca$scores)
+pcascore_df %>% ggplot(aes(x=Comp.1, y=Comp.2)) + geom_point()
+
+library(factoextra)
+fviz_pca_biplot(pca)
 ```
 
-Discussions of PCA here. 
+The cumulative proportion of variance is less than 0.80 up to the second principal component (PC), therefore the first and second principal components will be kept (PC1 & PC2). Two principal components can summarize 73% of the total variability. The higher a PC mean the higher amount of variation, and a lower PC means a lower amount of variation. All of the loadings in PC1 have a similar sign and magnitude expect for `perinc`. This means that the higher a state's traffic fatality rate, beer tax, average miles per driver and unemployment rate, the lower their per capita personal income will be. PC2 suggest that the higher a state's beer tax, average miles per driver, per capita personal income, and traffic fatality rate, the lower their unemployment rate. PC1 and PC2 are uncorrelated. 
 
 ###  Linear Classifier
 
 ```{R}
+Fatality$jaild <- ifelse(Fatality$jaild=="yes",1,0)
+Fat_class <- Fatality %>% select(jaild, mrall, beertax, vmiles, unrate, perinc) %>% na.omit()
+```
+
+```{R}
 # linear classifier code here
+logistic_fit <- glm(jaild~., data=Fat_class, family="binomial")
+
+prob_reg <- predict(logistic_fit,type="response") 
+prob_reg %>% round(3)
+class_diag(prob_reg,Fat_class$jaild, positive=1) 
+
+prob_reg <- ifelse(prob_reg>0.5, "yes", "no")
+Fatality$jaild <- ifelse(Fatality$jaild==1,"yes","no")
+table(actual=Fatality$jaild, predicted=prob_reg)
 ```
 
 ```{R}
 # cross-validation of linear classifier here
+set.seed(1234)
+k=5 #choose number of folds
+
+data <- Fat_class[sample(nrow(Fat_class)),] #randomly order rows
+folds <- cut(seq(1:nrow(Fat_class)),breaks=k,labels=F) #create 10 folds
+
+diags<-NULL
+for(i in 1:k){
+  ## Create training and test sets
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$jaild
+  
+  ## Train model on training set
+  fit<-glm(jaild~., data=train, family="binomial")
+  probs<-predict(fit, newdata = test, type="response")
+  
+  ## Test model on test set (save all k results)
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+summarize_all(diags,mean)
 ```
 
-Discussion here
+The AUC from the linear regression classifier is 0.75, which means in-sample the model is performing fair. The CV AUC is 0.44 which is even lower, meaning the model is performing bad out of sample. The model is predicting new observations poorly per the CV AUC. Since there is a significant difference between the AUC values this model does show signs of overfitting.
 
 ### Non-Parametric Classifier
 
 ```{R}
+Fatality$jaild <- ifelse(Fatality$jaild=="yes",1,0)
+```
+
+```{R}
 library(caret)
 # non-parametric classifier code here
+knn_fit <- knn3(jaild~., data=Fat_class)
+
+prob_knn <- predict(knn_fit, newdata = Fat_class)[,2]
+prob_knn %>% round(3)
+class_diag(prob_knn, Fat_class$jaild, positive = 1)
+
+prob_knn <- ifelse(prob_knn>0.5, "yes","no")
+table(actual=Fatality$jaild, predicted=prob_knn)
 ```
 
 ```{R}
 # cross-validation of np classifier here
+set.seed(1234)
+k=5 #choose number of folds
+
+data<-Fat_class[sample(nrow(Fat_class)),] #randomly order rows
+folds<-cut(seq(1:nrow(Fat_class)),breaks=k,labels=F) #create 10 folds
+
+diags<-NULL
+for(i in 1:k){
+  ## Create training and test sets
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$jaild
+  
+  ## Train model on training set
+  fit<-knn3(jaild~.,data=train)
+  probs<-predict(fit,newdata = test)[,2]
+  
+  ## Test model on test set (save all k results)
+  diags<-rbind(diags,class_diag(probs,truth, positive=1))
+}
+summarize_all(diags,mean)
 ```
 
-Discussion
+The AUC from the k-nearest-neighbors classifier is 0.81, meaning the in-sample model is performing good. The CV AUC is 0.48, which means the out of sample model is performing badly. The model is predicting new observations poorly per the CV AUC. Since there is a significant difference between the AUC values this model does show signs of overfitting. The nonparametric model performed better in comparison to the linear model in its cross-validation performance, but not by much. only by 0.04.
 
 
 ### Regression/Numeric Prediction
 
 ```{R}
 # regression model code here
+linear_fit <- lm(mrall ~ vmiles + beertax, data=Fat_class)
+
+prob_linear <- predict(linear_fit, newdata=Fat_class)
+prob_linear %>% round(3)
+
+mean((Fat_class$mrall-prob_linear)^2)
 ```
 
 ```{R}
 # cross-validation of regression model here
+set.seed(1234)
+k=5 #choose number of folds
+
+data <- Fat_class[sample(nrow(Fat_class)),] #randomly order rows
+folds <- cut(seq(1:nrow(Fat_class)),breaks=k,labels=F) #create folds
+
+diags<-NULL
+for(i in 1:k){
+  train <- data[folds!=i,]
+  test <- data[folds==i,]
+  
+  ## Fit linear regression model to training set
+  fit <- lm(mrall ~ vmiles + beertax,data=train)
+  
+  ## Get predictions/y-hats on test set (fold i)
+  yhat <- predict(fit, newdata=test)
+  
+  ## Compute prediction error  (MSE) for fold i
+  diags <- mean((test$mrall-yhat)^2) 
+}
+mean(diags)
 ```
 
-Discussion
+The mean squared error of our regression model is 0.15. This is a good value because it is the measure of error and we want it to be small. The mean squared error in the cross-validation regression model is 0.14. Both mean squared error are very similar therefore there are no signs of overfitting.
 
 ### Python 
 
 ```{R}
 library(reticulate)
+beginning <-"Merry Christmas to all"
 ```
 
 ```{python}
 # python code here
+end="and to all a good night."
+holla="On the first day of Chritmas my true love sent to me"
+print(r.beginning, end)
 ```
 
-Discussion
+```{R}
+dayz <- "a partridge in a pear tree"
+cat(c(py$holla,dayz))
+```
+
+Here we see that we are able to use r and python together in order to get one output. In the r code chunk I loaded the package `reticulate` which allows this. Then in the first r chunk I created the first part of the message In the python chunk I created the second part of the message. Then I used `r.beginning` in `print` to grab the first part of the message from the r code and put it with the second part. I created another first part of a message this time in the python chunk. In the second r chunk I created the second part of the message and used `py$` in order to grab the first part of the message from the python chunk and put them together.
 
 ### Concluding Remarks
 
-Include concluding remarks here, if any
+This data set did not have as many associations between the variables as I had expected but it was still interesting to run analysis. Overall drinking and driving is still very dangerous and should not occur for any reason especially when there are so many alternatives.
 
 
 
